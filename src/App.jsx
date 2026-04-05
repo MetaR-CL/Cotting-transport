@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from './supabase.js'
 
 // ─── HELPERS ─────────────────────────────────────────────────
@@ -34,6 +34,9 @@ const I = {
   download: 'M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3',
   refresh: 'M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15',
   trash: 'M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2',
+  settings: 'M12 15a3 3 0 100-6 3 3 0 000 6zM19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z',
+  image: 'M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2zM8.5 10a1.5 1.5 0 100-3 1.5 1.5 0 000 3zM21 15l-5-5L5 21',
+  tag: 'M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82zM7 7h.01',
 }
 
 // ─── COLORS & STYLES ─────────────────────────────────────────
@@ -42,6 +45,7 @@ const C = {
   accent: '#e8593c', accentSoft: 'rgba(232,89,60,0.12)',
   green: '#34d399', greenSoft: 'rgba(52,211,153,0.12)',
   yellow: '#fbbf24', yellowSoft: 'rgba(251,191,36,0.12)',
+  blue: '#60a5fa', blueSoft: 'rgba(96,165,250,0.12)',
   text: '#e8e8ec', muted: '#8b8d97',
   border: '#2a2d36', input: '#14161b',
 }
@@ -57,9 +61,9 @@ const S = {
   logo: { display: 'flex', alignItems: 'center', gap: 8 },
   logoText: { fontSize: 16, fontWeight: 700, letterSpacing: '-0.02em' },
   logoSub: { fontSize: 10, color: C.muted, textTransform: 'uppercase', letterSpacing: '0.08em' },
-  nav: { display: 'flex', gap: 2, background: C.input, borderRadius: 10, padding: 3 },
+  nav: { display: 'flex', gap: 2, background: C.input, borderRadius: 10, padding: 3, flexWrap: 'wrap' },
   navBtn: (a) => ({
-    padding: '7px 12px', borderRadius: 8, border: 'none', cursor: 'pointer',
+    padding: '7px 10px', borderRadius: 8, border: 'none', cursor: 'pointer',
     fontSize: 11, fontWeight: 600, transition: 'all 0.2s',
     background: a ? C.accent : 'transparent', color: a ? '#fff' : C.muted,
     display: 'flex', alignItems: 'center', gap: 4,
@@ -108,31 +112,49 @@ const S = {
   },
 }
 
-// ─── DATA HOOKS ──────────────────────────────────────────────
+// ─── IMAGE UPLOAD HELPER ─────────────────────────────────────
+async function uploadImage(file, clientId) {
+  const ext = file.name.split('.').pop()
+  const path = `${clientId}/${Date.now()}.${ext}`
+  const { data, error } = await supabase.storage
+    .from('client-images')
+    .upload(path, file, { cacheControl: '3600', upsert: false })
+  if (error) throw error
+  const { data: urlData } = supabase.storage.from('client-images').getPublicUrl(path)
+  return urlData.publicUrl
+}
+
+// ─── DATA HOOK ───────────────────────────────────────────────
 function useSupabase() {
   const [clients, setClients] = useState([])
   const [drivers, setDrivers] = useState([])
   const [deliveries, setDeliveries] = useState([])
+  const [sections, setSections] = useState([])
+  const [clientImages, setClientImages] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
   const fetchAll = useCallback(async () => {
     try {
       setError(null)
-      const [cRes, dRes, delRes] = await Promise.all([
+      const [cRes, dRes, delRes, sRes, imgRes] = await Promise.all([
         supabase.from('clients').select('*').eq('active', true).order('name'),
         supabase.from('drivers').select('*').eq('active', true).order('name'),
         supabase.from('deliveries').select('*').order('date', { ascending: false }),
+        supabase.from('sections').select('*').eq('active', true).order('name'),
+        supabase.from('client_images').select('*').order('created_at', { ascending: false }),
       ])
       if (cRes.error) throw cRes.error
       if (dRes.error) throw dRes.error
       if (delRes.error) throw delRes.error
+      // sections et images peuvent ne pas exister encore
       setClients(cRes.data)
       setDrivers(dRes.data)
       setDeliveries(delRes.data)
+      setSections(sRes.error ? [] : sRes.data)
+      setClientImages(imgRes.error ? [] : imgRes.data)
     } catch (e) {
       setError(e.message)
-      console.error('Fetch error:', e)
     } finally {
       setLoading(false)
     }
@@ -140,18 +162,19 @@ function useSupabase() {
 
   useEffect(() => { fetchAll() }, [fetchAll])
 
-  // Real-time subscriptions
   useEffect(() => {
     const channel = supabase
       .channel('cotting-realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'deliveries' }, () => fetchAll())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'clients' }, () => fetchAll())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'drivers' }, () => fetchAll())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'sections' }, () => fetchAll())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'client_images' }, () => fetchAll())
       .subscribe()
     return () => { supabase.removeChannel(channel) }
   }, [fetchAll])
 
-  return { clients, drivers, deliveries, loading, error, refresh: fetchAll }
+  return { clients, drivers, deliveries, sections, clientImages, loading, error, refresh: fetchAll }
 }
 
 // ─── MAIN APP ────────────────────────────────────────────────
@@ -191,13 +214,14 @@ export default function App() {
           </div>
         </div>
         <div style={S.nav}>
-          {[['patron', 'Patron', I.users], ['driver', 'Chauffeur', I.truck], ['secretary', 'Bureau', I.chart]].map(([k, l, ic]) => (
+          {[['admin', 'Admin', I.settings], ['patron', 'Patron', I.users], ['driver', 'Chauffeur', I.truck], ['secretary', 'Bureau', I.chart]].map(([k, l, ic]) => (
             <button key={k} style={S.navBtn(view === k)} onClick={() => setView(k)}>
               <Icon d={ic} size={13} /> {l}
             </button>
           ))}
         </div>
       </div>
+      {view === 'admin' && <AdminView {...db} />}
       {view === 'patron' && <PatronView {...db} />}
       {view === 'driver' && <DriverView {...db} />}
       {view === 'secretary' && <SecretaryView {...db} />}
@@ -206,42 +230,268 @@ export default function App() {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// PATRON VIEW
+// ADMIN VIEW — Gestion chauffeurs, sections, clients, images
 // ═══════════════════════════════════════════════════════════════
-function PatronView({ clients, drivers, deliveries, refresh }) {
-  const [tab, setTab] = useState('deliveries')
-  const [showNewDel, setShowNewDel] = useState(false)
-  const [showNewClient, setShowNewClient] = useState(false)
+function AdminView({ clients, drivers, sections, clientImages, refresh }) {
+  const [tab, setTab] = useState('drivers')
+  const [editDriver, setEditDriver] = useState(null)
+  const [showNewDriver, setShowNewDriver] = useState(false)
+  const [editSection, setEditSection] = useState(null)
+  const [showNewSection, setShowNewSection] = useState(false)
   const [editClient, setEditClient] = useState(null)
+  const [showNewClient, setShowNewClient] = useState(false)
+  const [viewImages, setViewImages] = useState(null) // client id
+
+  // ── Driver CRUD ──
+  async function saveDriver(data) {
+    if (data.id) {
+      await supabase.from('drivers').update({ name: data.name, phone: data.phone }).eq('id', data.id)
+    } else {
+      await supabase.from('drivers').insert({ name: data.name, phone: data.phone })
+    }
+    refresh(); setEditDriver(null); setShowNewDriver(false)
+  }
+  async function deleteDriver(id) {
+    if (confirm('Désactiver ce chauffeur ?')) {
+      await supabase.from('drivers').update({ active: false }).eq('id', id)
+      refresh()
+    }
+  }
+
+  // ── Section CRUD ──
+  async function saveSection(data) {
+    if (data.id) {
+      await supabase.from('sections').update({ name: data.name, icon: data.icon, color: data.color }).eq('id', data.id)
+    } else {
+      await supabase.from('sections').insert({ name: data.name, icon: data.icon, color: data.color })
+    }
+    refresh(); setEditSection(null); setShowNewSection(false)
+  }
+  async function deleteSection(id) {
+    if (confirm('Désactiver cette section ?')) {
+      await supabase.from('sections').update({ active: false }).eq('id', id)
+      refresh()
+    }
+  }
+
+  // ── Client CRUD ──
+  async function saveClient(data) {
+    const payload = {
+      name: data.name, address: data.address, contact: data.contact,
+      phone: data.phone, notes: data.notes, default_qty: data.default_qty,
+      section_id: data.section_id || null, default_unit: data.default_unit || 'porcs',
+    }
+    if (data.id) {
+      await supabase.from('clients').update(payload).eq('id', data.id)
+    } else {
+      await supabase.from('clients').insert(payload)
+    }
+    refresh(); setEditClient(null); setShowNewClient(false)
+  }
+
+  // ── Image management ──
+  async function addImage(clientId, file, caption) {
+    try {
+      const url = await uploadImage(file, clientId)
+      await supabase.from('client_images').insert({ client_id: clientId, image_url: url, caption })
+      refresh()
+    } catch (e) {
+      alert('Erreur upload: ' + e.message)
+    }
+  }
+  async function deleteImage(id) {
+    if (confirm('Supprimer cette image ?')) {
+      await supabase.from('client_images').delete().eq('id', id)
+      refresh()
+    }
+  }
+
+  return (
+    <div style={S.page}>
+      <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 16 }}>⚙️ Administration</div>
+
+      <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' }}>
+        {[['drivers', '🚛 Chauffeurs'], ['sections', '🏷️ Sections'], ['clients', '👥 Clients']].map(([k, l]) => (
+          <button key={k} style={S.btn(tab === k ? 'primary' : 'outline')} onClick={() => setTab(k)}>{l}</button>
+        ))}
+      </div>
+
+      {/* ── CHAUFFEURS ── */}
+      {tab === 'drivers' && (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <div style={S.section}>Chauffeurs ({drivers.length})</div>
+            <button style={S.btn()} onClick={() => setShowNewDriver(true)}>
+              <Icon d={I.plus} size={13} /> Ajouter
+            </button>
+          </div>
+          {drivers.map(d => (
+            <div key={d.id} style={S.card}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>{d.name}</div>
+                  <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
+                    <Icon d={I.phone} size={11} /> {d.phone || 'Pas de téléphone'}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button style={S.btn('outline')} onClick={() => setEditDriver(d)}>Modifier</button>
+                  <button style={{ ...S.btn('ghost'), padding: 6 }} onClick={() => deleteDriver(d.id)}>
+                    <Icon d={I.trash} size={14} color="#ef4444" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+          {drivers.length === 0 && <div style={{ textAlign: 'center', color: C.muted, padding: 30 }}>Aucun chauffeur. Ajoutez-en un !</div>}
+        </>
+      )}
+
+      {/* ── SECTIONS ── */}
+      {tab === 'sections' && (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <div style={S.section}>Sections / Catégories</div>
+            <button style={S.btn()} onClick={() => setShowNewSection(true)}>
+              <Icon d={I.plus} size={13} /> Ajouter
+            </button>
+          </div>
+          <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>
+            Les sections permettent de catégoriser vos clients : cochons, petit-lait, biogaz, etc.
+          </div>
+          {sections.map(s => (
+            <div key={s.id} style={{ ...S.card, borderLeft: `3px solid ${s.color}` }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 20 }}>{s.icon}</span>
+                  <div>
+                    <div style={{ fontWeight: 700 }}>{s.name}</div>
+                    <div style={{ fontSize: 11, color: C.muted }}>
+                      {clients.filter(c => c.section_id === s.id).length} client(s)
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button style={S.btn('outline')} onClick={() => setEditSection(s)}>Modifier</button>
+                  <button style={{ ...S.btn('ghost'), padding: 6 }} onClick={() => deleteSection(s.id)}>
+                    <Icon d={I.trash} size={14} color="#ef4444" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+          {sections.length === 0 && <div style={{ textAlign: 'center', color: C.muted, padding: 30 }}>Aucune section. Créez-en une !</div>}
+        </>
+      )}
+
+      {/* ── CLIENTS ── */}
+      {tab === 'clients' && (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <div style={S.section}>Clients ({clients.length})</div>
+            <button style={S.btn()} onClick={() => setShowNewClient(true)}>
+              <Icon d={I.plus} size={13} /> Ajouter
+            </button>
+          </div>
+          {/* Group by section */}
+          {sections.map(sec => {
+            const secClients = clients.filter(c => c.section_id === sec.id)
+            if (!secClients.length) return null
+            return (
+              <div key={sec.id} style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <span>{sec.icon}</span> {sec.name}
+                  <span style={S.badge(C.muted, C.input)}>{secClients.length}</span>
+                </div>
+                {secClients.map(c => (
+                  <ClientCard key={c.id} client={c} sections={sections} clientImages={clientImages}
+                    onEdit={() => setEditClient(c)} onViewImages={() => setViewImages(c.id)} />
+                ))}
+              </div>
+            )
+          })}
+          {/* Clients sans section */}
+          {(() => {
+            const noSec = clients.filter(c => !c.section_id)
+            if (!noSec.length) return null
+            return (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6, color: C.muted }}>📦 Sans section</div>
+                {noSec.map(c => (
+                  <ClientCard key={c.id} client={c} sections={sections} clientImages={clientImages}
+                    onEdit={() => setEditClient(c)} onViewImages={() => setViewImages(c.id)} />
+                ))}
+              </div>
+            )
+          })()}
+        </>
+      )}
+
+      {/* Modals */}
+      {(showNewDriver || editDriver) && (
+        <DriverModal driver={editDriver} onSave={saveDriver} onClose={() => { setEditDriver(null); setShowNewDriver(false) }} />
+      )}
+      {(showNewSection || editSection) && (
+        <SectionModal section={editSection} onSave={saveSection} onClose={() => { setEditSection(null); setShowNewSection(false) }} />
+      )}
+      {(showNewClient || editClient) && (
+        <ClientModal client={editClient} sections={sections} onSave={saveClient}
+          onClose={() => { setEditClient(null); setShowNewClient(false) }} />
+      )}
+      {viewImages && (
+        <ImageGalleryModal clientId={viewImages} images={clientImages.filter(i => i.client_id === viewImages)}
+          client={clients.find(c => c.id === viewImages)}
+          onAdd={addImage} onDelete={deleteImage} onClose={() => setViewImages(null)} />
+      )}
+    </div>
+  )
+}
+
+function ClientCard({ client, sections, clientImages, onEdit, onViewImages }) {
+  const sec = sections.find(s => s.id === client.section_id)
+  const imgCount = clientImages.filter(i => i.client_id === client.id).length
+  return (
+    <div style={S.card}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 700, fontSize: 13 }}>{client.name}</div>
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}><Icon d={I.map} size={11} /> {client.address}</div>
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 1 }}><Icon d={I.phone} size={11} /> {client.contact} — {client.phone}</div>
+          {client.notes && <div style={{ fontSize: 11, color: C.yellow, marginTop: 3 }}>💡 {client.notes}</div>}
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
+          {sec && <span style={S.badge(sec.color, sec.color + '20')}>{sec.icon} {sec.name}</span>}
+          <span style={S.badge(C.accent, C.accentSoft)}>{client.default_qty} {client.default_unit || 'porcs'}</span>
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+        <button style={S.btn('outline')} onClick={onEdit}>Modifier</button>
+        <button style={S.btn('outline')} onClick={onViewImages}>
+          <Icon d={I.image} size={13} /> Photos ({imgCount})
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PATRON VIEW (simplifié — la gestion est dans Admin)
+// ═══════════════════════════════════════════════════════════════
+function PatronView({ clients, drivers, deliveries, sections, refresh }) {
+  const [showNewDel, setShowNewDel] = useState(false)
 
   const today = todayStr()
   const todayDel = deliveries.filter(d => d.date === today)
   const done = todayDel.filter(d => d.status === 'delivered').length
 
   async function addDelivery(data) {
+    const client = clients.find(c => c.id === data.clientId)
     await supabase.from('deliveries').insert({
       date: today, driver_id: data.driverId, client_id: data.clientId,
       qty_planned: data.qtyPlanned, status: 'pending',
+      section_id: client?.section_id || null, unit: client?.default_unit || 'porcs',
     })
-    refresh()
-    setShowNewDel(false)
-  }
-
-  async function saveClient(data) {
-    if (data.id) {
-      await supabase.from('clients').update({
-        name: data.name, address: data.address, contact: data.contact,
-        phone: data.phone, notes: data.notes, default_qty: data.default_qty,
-      }).eq('id', data.id)
-    } else {
-      await supabase.from('clients').insert({
-        name: data.name, address: data.address, contact: data.contact,
-        phone: data.phone, notes: data.notes, default_qty: data.default_qty,
-      })
-    }
-    refresh()
-    setEditClient(null)
-    setShowNewClient(false)
+    refresh(); setShowNewDel(false)
   }
 
   async function deleteDelivery(id) {
@@ -259,104 +509,70 @@ function PatronView({ clients, drivers, deliveries, refresh }) {
         <div style={S.stat}><div style={{ ...S.statN, color: C.yellow }}>{todayDel.length - done}</div><div style={S.statL}>En attente</div></div>
       </div>
 
-      <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
-        <button style={S.btn(tab === 'deliveries' ? 'primary' : 'outline')} onClick={() => setTab('deliveries')}>
-          <Icon d={I.truck} size={13} /> Livraisons
-        </button>
-        <button style={S.btn(tab === 'clients' ? 'primary' : 'outline')} onClick={() => setTab('clients')}>
-          <Icon d={I.users} size={13} /> Clients
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+        <div style={S.section}>Tournées du jour</div>
+        <button style={S.btn()} onClick={() => setShowNewDel(true)}>
+          <Icon d={I.plus} size={13} /> Ajouter
         </button>
       </div>
 
-      {tab === 'deliveries' && (
-        <>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-            <div style={S.section}>Tournées du jour</div>
-            <button style={S.btn()} onClick={() => setShowNewDel(true)}>
-              <Icon d={I.plus} size={13} /> Ajouter
-            </button>
-          </div>
-          {drivers.map(driver => {
-            const dDel = todayDel.filter(d => d.driver_id === driver.id)
-            if (!dDel.length) return null
-            return (
-              <div key={driver.id} style={{ marginBottom: 14 }}>
-                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 5 }}>
-                  <Icon d={I.truck} size={13} color={C.accent} /> {driver.name}
-                  <span style={S.badge(C.muted, C.input)}>{dDel.length} arrêts</span>
-                </div>
-                {dDel.map(del => {
-                  const client = clients.find(c => c.id === del.client_id)
-                  return (
-                    <div key={del.id} style={{ ...S.card, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 600, fontSize: 13 }}>{client?.name}</div>
-                        <div style={{ fontSize: 11, color: C.muted }}>{client?.address}</div>
-                        <div style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>
-                          Prévu: {del.qty_planned}
-                          {del.qty_delivered != null && <> → Livré: <b style={{ color: C.green }}>{del.qty_delivered}</b></>}
-                        </div>
-                        {del.notes && <div style={{ fontSize: 11, color: C.yellow, marginTop: 2 }}>📝 {del.notes}</div>}
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        {del.status === 'delivered' ? (
-                          <span style={S.badge(C.green, C.greenSoft)}><Icon d={I.check} size={11} color={C.green} /> Livré</span>
-                        ) : del.status === 'issue' ? (
-                          <span style={S.badge(C.yellow, C.yellowSoft)}>⚠️</span>
-                        ) : (
-                          <span style={S.badge(C.muted, C.input)}>En attente</span>
-                        )}
-                        {del.status === 'pending' && (
-                          <button style={{ ...S.btn('ghost'), padding: 4 }} onClick={() => deleteDelivery(del.id)}>
-                            <Icon d={I.trash} size={14} color="#ef4444" />
-                          </button>
-                        )}
-                      </div>
+      {drivers.map(driver => {
+        const dDel = todayDel.filter(d => d.driver_id === driver.id)
+        if (!dDel.length) return null
+        return (
+          <div key={driver.id} style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 5 }}>
+              <Icon d={I.truck} size={13} color={C.accent} /> {driver.name}
+              <span style={S.badge(C.muted, C.input)}>{dDel.length} arrêts</span>
+            </div>
+            {dDel.map(del => {
+              const client = clients.find(c => c.id === del.client_id)
+              const sec = sections.find(s => s.id === del.section_id)
+              return (
+                <div key={del.id} style={{ ...S.card, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13, display: 'flex', alignItems: 'center', gap: 5 }}>
+                      {sec && <span style={{ fontSize: 14 }}>{sec.icon}</span>}
+                      {client?.name}
                     </div>
-                  )
-                })}
-              </div>
-            )
-          })}
-          {todayDel.length === 0 && (
-            <div style={{ textAlign: 'center', color: C.muted, padding: 40 }}>
-              Aucune livraison planifiée aujourd'hui.<br />
-              <button style={{ ...S.btn(), marginTop: 12 }} onClick={() => setShowNewDel(true)}>
-                <Icon d={I.plus} size={13} /> Créer une tournée
-              </button>
-            </div>
-          )}
-        </>
-      )}
-
-      {tab === 'clients' && (
-        <>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-            <div style={S.section}>Clients ({clients.length})</div>
-            <button style={S.btn()} onClick={() => setShowNewClient(true)}>
-              <Icon d={I.plus} size={13} /> Nouveau
-            </button>
-          </div>
-          {clients.map(c => (
-            <div key={c.id} style={{ ...S.card, cursor: 'pointer' }} onClick={() => setEditClient(c)}>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: 13 }}>{c.name}</div>
-                  <div style={{ fontSize: 11, color: C.muted, marginTop: 3 }}><Icon d={I.map} size={11} /> {c.address}</div>
-                  <div style={{ fontSize: 11, color: C.muted, marginTop: 1 }}><Icon d={I.phone} size={11} /> {c.contact} — {c.phone}</div>
-                  {c.notes && <div style={{ fontSize: 11, color: C.yellow, marginTop: 3 }}>💡 {c.notes}</div>}
+                    <div style={{ fontSize: 11, color: C.muted }}>{client?.address}</div>
+                    <div style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>
+                      Prévu: {del.qty_planned} {del.unit || 'porcs'}
+                      {del.qty_delivered != null && <> → Livré: <b style={{ color: C.green }}>{del.qty_delivered}</b></>}
+                    </div>
+                    {del.notes && <div style={{ fontSize: 11, color: C.yellow, marginTop: 2 }}>📝 {del.notes}</div>}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    {del.status === 'delivered' ? (
+                      <span style={S.badge(C.green, C.greenSoft)}><Icon d={I.check} size={11} color={C.green} /> Livré</span>
+                    ) : del.status === 'issue' ? (
+                      <span style={S.badge(C.yellow, C.yellowSoft)}>⚠️</span>
+                    ) : (
+                      <span style={S.badge(C.muted, C.input)}>En attente</span>
+                    )}
+                    {del.status === 'pending' && (
+                      <button style={{ ...S.btn('ghost'), padding: 4 }} onClick={() => deleteDelivery(del.id)}>
+                        <Icon d={I.trash} size={14} color="#ef4444" />
+                      </button>
+                    )}
+                  </div>
                 </div>
-                <span style={S.badge(C.accent, C.accentSoft)}>{c.default_qty}/défaut</span>
-              </div>
-            </div>
-          ))}
-        </>
+              )
+            })}
+          </div>
+        )
+      })}
+      {todayDel.length === 0 && (
+        <div style={{ textAlign: 'center', color: C.muted, padding: 40 }}>
+          Aucune livraison planifiée aujourd'hui.
+          <br /><button style={{ ...S.btn(), marginTop: 12 }} onClick={() => setShowNewDel(true)}>
+            <Icon d={I.plus} size={13} /> Créer une tournée
+          </button>
+        </div>
       )}
 
-      {showNewDel && <NewDeliveryModal clients={clients} drivers={drivers} onSave={addDelivery} onClose={() => setShowNewDel(false)} />}
-      {(showNewClient || editClient) && (
-        <ClientModal client={editClient} onSave={saveClient} onClose={() => { setEditClient(null); setShowNewClient(false) }} />
-      )}
+      {showNewDel && <NewDeliveryModal clients={clients} drivers={drivers} sections={sections}
+        onSave={addDelivery} onClose={() => setShowNewDel(false)} />}
     </div>
   )
 }
@@ -364,9 +580,10 @@ function PatronView({ clients, drivers, deliveries, refresh }) {
 // ═══════════════════════════════════════════════════════════════
 // DRIVER VIEW
 // ═══════════════════════════════════════════════════════════════
-function DriverView({ clients, drivers, deliveries, refresh }) {
+function DriverView({ clients, drivers, deliveries, sections, clientImages, refresh }) {
   const [driverId, setDriverId] = useState(() => localStorage.getItem('cotting-driver') || null)
   const [confirmDel, setConfirmDel] = useState(null)
+  const [showClientImages, setShowClientImages] = useState(null)
 
   const today = todayStr()
 
@@ -409,8 +626,7 @@ function DriverView({ clients, drivers, deliveries, refresh }) {
       qty_delivered: data.qty, status: data.status,
       notes: data.notes, return_time: new Date().toISOString(),
     }).eq('id', data.id)
-    refresh()
-    setConfirmDel(null)
+    refresh(); setConfirmDel(null)
   }
 
   return (
@@ -419,9 +635,7 @@ function DriverView({ clients, drivers, deliveries, refresh }) {
         <button style={S.btn('ghost')} onClick={() => { setDriverId(null); localStorage.removeItem('cotting-driver') }}>
           <Icon d={I.back} size={15} /> Retour
         </button>
-        <button style={S.btn('ghost')} onClick={refresh}>
-          <Icon d={I.refresh} size={14} />
-        </button>
+        <button style={S.btn('ghost')} onClick={refresh}><Icon d={I.refresh} size={14} /></button>
       </div>
 
       <div style={{ marginTop: 10, marginBottom: 14 }}>
@@ -440,16 +654,21 @@ function DriverView({ clients, drivers, deliveries, refresh }) {
 
       {myDel.map(del => {
         const client = clients.find(c => c.id === del.client_id)
+        const sec = sections.find(s => s.id === del.section_id)
+        const imgs = clientImages.filter(i => i.client_id === del.client_id)
         const isDone = del.status === 'delivered'
         const isIssue = del.status === 'issue'
         return (
           <div key={del.id} style={{
             ...S.card, opacity: isDone ? 0.55 : 1,
-            borderLeft: `3px solid ${isDone ? C.green : isIssue ? C.yellow : C.accent}`,
+            borderLeft: `3px solid ${isDone ? C.green : isIssue ? C.yellow : sec?.color || C.accent}`,
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 700, fontSize: 14 }}>{client?.name}</div>
+                <div style={{ fontWeight: 700, fontSize: 14, display: 'flex', alignItems: 'center', gap: 5 }}>
+                  {sec && <span style={{ fontSize: 14 }}>{sec.icon}</span>}
+                  {client?.name}
+                </div>
                 <div style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>
                   <Icon d={I.map} size={11} /> {client?.address}
                 </div>
@@ -463,8 +682,15 @@ function DriverView({ clients, drivers, deliveries, refresh }) {
                     💡 {client.notes}
                   </div>
                 )}
+                {/* Photos du lieu */}
+                {imgs.length > 0 && (
+                  <button style={{ ...S.btn('outline'), marginTop: 6, fontSize: 11 }}
+                    onClick={() => setShowClientImages(del.client_id)}>
+                    <Icon d={I.image} size={12} /> {imgs.length} photo{imgs.length > 1 ? 's' : ''} du lieu
+                  </button>
+                )}
                 <div style={{ marginTop: 6, fontSize: 12 }}>
-                  <b>{del.qty_planned}</b> porcs à livrer
+                  <b>{del.qty_planned}</b> {del.unit || 'porcs'} à livrer
                   {isDone && <span style={{ color: C.green, marginLeft: 6 }}>✓ {del.qty_delivered} livrés</span>}
                   {isIssue && <span style={{ color: C.yellow, marginLeft: 6 }}>⚠️ {del.notes}</span>}
                 </div>
@@ -478,23 +704,26 @@ function DriverView({ clients, drivers, deliveries, refresh }) {
       })}
 
       {myDel.length === 0 && (
-        <div style={{ textAlign: 'center', color: C.muted, padding: 40 }}>
-          Pas de livraison prévue aujourd'hui 🎉
-        </div>
+        <div style={{ textAlign: 'center', color: C.muted, padding: 40 }}>Pas de livraison prévue aujourd'hui 🎉</div>
       )}
 
       {confirmDel && (
         <ConfirmModal delivery={confirmDel} client={clients.find(c => c.id === confirmDel.client_id)}
           onSave={confirmDelivery} onClose={() => setConfirmDel(null)} />
       )}
+      {showClientImages && (
+        <ImageViewModal images={clientImages.filter(i => i.client_id === showClientImages)}
+          client={clients.find(c => c.id === showClientImages)}
+          onClose={() => setShowClientImages(null)} />
+      )}
     </div>
   )
 }
 
 // ═══════════════════════════════════════════════════════════════
-// SECRETARY VIEW — avec export CSV
+// SECRETARY VIEW
 // ═══════════════════════════════════════════════════════════════
-function SecretaryView({ clients, drivers, deliveries }) {
+function SecretaryView({ clients, drivers, deliveries, sections }) {
   const [monthOffset, setMonthOffset] = useState(0)
 
   const now = new Date()
@@ -527,13 +756,14 @@ function SecretaryView({ clients, drivers, deliveries }) {
   })
 
   function exportCSV() {
-    const header = ['Date', 'Chauffeur', 'Client', 'Adresse', 'Prévu', 'Livré', 'Statut', 'Notes', 'Heure retour']
+    const header = ['Date', 'Chauffeur', 'Client', 'Section', 'Adresse', 'Prévu', 'Livré', 'Unité', 'Statut', 'Notes', 'Heure retour']
     const rows = monthDel.map(d => {
       const driver = drivers.find(dr => dr.id === d.driver_id)
       const client = clients.find(c => c.id === d.client_id)
+      const sec = sections.find(s => s.id === d.section_id)
       return [
-        d.date, driver?.name, client?.name, client?.address,
-        d.qty_planned, d.qty_delivered ?? '', d.status,
+        d.date, driver?.name, client?.name, sec?.name || '', client?.address,
+        d.qty_planned, d.qty_delivered ?? '', d.unit || 'porcs', d.status,
         d.notes ?? '', d.return_time ? new Date(d.return_time).toLocaleString('fr-CH') : '',
       ]
     })
@@ -542,12 +772,13 @@ function SecretaryView({ clients, drivers, deliveries }) {
   }
 
   function exportClientCSV() {
-    const header = ['Client', 'Adresse', 'Nb livraisons', 'Total porcs', 'Problèmes']
+    const header = ['Client', 'Section', 'Adresse', 'Nb livraisons', 'Total', 'Unité', 'Problèmes']
     const rows = Object.entries(clientSummary)
       .sort((a, b) => b[1].qty - a[1].qty)
       .map(([cId, data]) => {
         const client = clients.find(c => c.id === cId)
-        return [client?.name, client?.address, data.count, data.qty, data.issues]
+        const sec = sections.find(s => s.id === client?.section_id)
+        return [client?.name, sec?.name || '', client?.address, data.count, data.qty, client?.default_unit || 'porcs', data.issues]
       })
     const month = target.toLocaleDateString('fr-CH', { month: '2-digit', year: 'numeric' }).replace('/', '-')
     downloadCSV(`cotting-clients-${month}.csv`, [header, ...rows])
@@ -563,36 +794,60 @@ function SecretaryView({ clients, drivers, deliveries }) {
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
         <div style={S.stat}><div style={{ ...S.statN, color: C.green }}>{delivered.length}</div><div style={S.statL}>Livraisons</div></div>
-        <div style={S.stat}><div style={{ ...S.statN, color: C.accent }}>{totalQty}</div><div style={S.statL}>Porcs</div></div>
+        <div style={S.stat}><div style={{ ...S.statN, color: C.accent }}>{totalQty}</div><div style={S.statL}>Total</div></div>
         <div style={S.stat}><div style={{ ...S.statN, color: C.yellow }}>{issues}</div><div style={S.statL}>Problèmes</div></div>
       </div>
 
-      {/* Export buttons */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
         <button style={{ ...S.btn('green'), flex: 1, justifyContent: 'center' }} onClick={exportCSV}>
-          <Icon d={I.download} size={14} /> Export détaillé CSV
+          <Icon d={I.download} size={14} /> Export détaillé
         </button>
         <button style={{ ...S.btn('outline'), flex: 1, justifyContent: 'center' }} onClick={exportClientCSV}>
           <Icon d={I.download} size={14} /> Résumé clients
         </button>
       </div>
 
+      {/* Per section summary */}
+      {sections.length > 0 && (
+        <>
+          <div style={S.section}>Par section</div>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+            {sections.map(sec => {
+              const secDel = delivered.filter(d => d.section_id === sec.id)
+              const secQty = secDel.reduce((s, d) => s + (d.qty_delivered || 0), 0)
+              return (
+                <div key={sec.id} style={{ ...S.stat, minWidth: 80, borderLeft: `3px solid ${sec.color}` }}>
+                  <div style={{ fontSize: 16 }}>{sec.icon}</div>
+                  <div style={{ ...S.statN, fontSize: 20, color: sec.color }}>{secQty}</div>
+                  <div style={S.statL}>{sec.name}</div>
+                </div>
+              )
+            })}
+          </div>
+        </>
+      )}
+
       <div style={S.section}>Par client</div>
       <div style={{ ...S.card, padding: 0, overflow: 'hidden', marginBottom: 16 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
-            <tr><th style={S.th}>Client</th><th style={{ ...S.th, textAlign: 'right' }}>Livr.</th><th style={{ ...S.th, textAlign: 'right' }}>Porcs</th></tr>
+            <tr><th style={S.th}>Client</th><th style={S.th}>Section</th><th style={{ ...S.th, textAlign: 'right' }}>Livr.</th><th style={{ ...S.th, textAlign: 'right' }}>Total</th></tr>
           </thead>
           <tbody>
-            {Object.entries(clientSummary).sort((a, b) => b[1].qty - a[1].qty).map(([cId, data]) => (
-              <tr key={cId}>
-                <td style={S.td}>{clients.find(c => c.id === cId)?.name}</td>
-                <td style={{ ...S.td, textAlign: 'right' }}>{data.count}</td>
-                <td style={{ ...S.td, textAlign: 'right', fontWeight: 700, color: C.accent }}>{data.qty}</td>
-              </tr>
-            ))}
+            {Object.entries(clientSummary).sort((a, b) => b[1].qty - a[1].qty).map(([cId, data]) => {
+              const client = clients.find(c => c.id === cId)
+              const sec = sections.find(s => s.id === client?.section_id)
+              return (
+                <tr key={cId}>
+                  <td style={S.td}>{client?.name}</td>
+                  <td style={S.td}>{sec ? `${sec.icon} ${sec.name}` : '-'}</td>
+                  <td style={{ ...S.td, textAlign: 'right' }}>{data.count}</td>
+                  <td style={{ ...S.td, textAlign: 'right', fontWeight: 700, color: C.accent }}>{data.qty}</td>
+                </tr>
+              )
+            })}
             {!Object.keys(clientSummary).length && (
-              <tr><td colSpan={3} style={{ ...S.td, textAlign: 'center', color: C.muted }}>Aucune donnée</td></tr>
+              <tr><td colSpan={4} style={{ ...S.td, textAlign: 'center', color: C.muted }}>Aucune donnée</td></tr>
             )}
           </tbody>
         </table>
@@ -602,7 +857,7 @@ function SecretaryView({ clients, drivers, deliveries }) {
       <div style={{ ...S.card, padding: 0, overflow: 'hidden' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
-            <tr><th style={S.th}>Chauffeur</th><th style={{ ...S.th, textAlign: 'right' }}>Livr.</th><th style={{ ...S.th, textAlign: 'right' }}>Porcs</th></tr>
+            <tr><th style={S.th}>Chauffeur</th><th style={{ ...S.th, textAlign: 'right' }}>Livr.</th><th style={{ ...S.th, textAlign: 'right' }}>Total</th></tr>
           </thead>
           <tbody>
             {Object.entries(driverSummary).sort((a, b) => b[1].qty - a[1].qty).map(([dId, data]) => (
@@ -625,59 +880,129 @@ function SecretaryView({ clients, drivers, deliveries }) {
 // ═══════════════════════════════════════════════════════════════
 // MODALS
 // ═══════════════════════════════════════════════════════════════
-function NewDeliveryModal({ clients, drivers, onSave, onClose }) {
-  const [driverId, setDriverId] = useState(drivers[0]?.id || '')
-  const [clientId, setClientId] = useState(clients[0]?.id || '')
-  const [qty, setQty] = useState('')
-  const selClient = clients.find(c => c.id === clientId)
 
+// ── Driver Modal ──
+function DriverModal({ driver, onSave, onClose }) {
+  const [f, setF] = useState(driver || { name: '', phone: '' })
+  const set = (k, v) => setF({ ...f, [k]: v })
   return (
     <div style={S.modal} onClick={onClose}>
       <div style={S.modalC} onClick={e => e.stopPropagation()}>
-        <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 14 }}>Nouvelle livraison</div>
+        <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 14 }}>{driver ? 'Modifier' : 'Nouveau'} chauffeur</div>
         <div style={{ marginBottom: 10 }}>
-          <label style={S.label}>Chauffeur</label>
-          <select style={S.select} value={driverId} onChange={e => setDriverId(e.target.value)}>
-            {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-          </select>
-        </div>
-        <div style={{ marginBottom: 10 }}>
-          <label style={S.label}>Client</label>
-          <select style={S.select} value={clientId} onChange={e => {
-            setClientId(e.target.value)
-            const c = clients.find(cl => cl.id === e.target.value)
-            if (c) setQty(String(c.default_qty))
-          }}>
-            {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
+          <label style={S.label}>Nom complet</label>
+          <input style={S.input} value={f.name} onChange={e => set('name', e.target.value)} placeholder="Jean Dupont" />
         </div>
         <div style={{ marginBottom: 14 }}>
-          <label style={S.label}>Quantité (porcs)</label>
-          <input type="number" style={S.input} value={qty || selClient?.default_qty || ''} onChange={e => setQty(e.target.value)} />
+          <label style={S.label}>Téléphone</label>
+          <input style={S.input} value={f.phone || ''} onChange={e => set('phone', e.target.value)} placeholder="079 123 45 67" />
         </div>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <button style={S.btn('outline')} onClick={onClose}>Annuler</button>
-          <button style={S.btn()} onClick={() => onSave({
-            driverId, clientId, qtyPlanned: parseInt(qty || selClient?.default_qty || 0),
-          })}><Icon d={I.save} size={13} /> Ajouter</button>
+          <button style={S.btn()} onClick={() => onSave(f)}><Icon d={I.save} size={13} /> Enregistrer</button>
         </div>
       </div>
     </div>
   )
 }
 
+// ── Section Modal ──
+function SectionModal({ section, onSave, onClose }) {
+  const [f, setF] = useState(section || { name: '', icon: '📦', color: '#e8593c' })
+  const set = (k, v) => setF({ ...f, [k]: v })
+  const emojis = ['🐷', '🥛', '♻️', '📦', '🚛', '🧀', '🥩', '🌾', '⛽', '🏭']
+  const colors = ['#e8593c', '#60a5fa', '#34d399', '#fbbf24', '#a78bfa', '#f472b6', '#fb923c', '#4ade80']
+  return (
+    <div style={S.modal} onClick={onClose}>
+      <div style={S.modalC} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 14 }}>{section ? 'Modifier' : 'Nouvelle'} section</div>
+        <div style={{ marginBottom: 10 }}>
+          <label style={S.label}>Nom</label>
+          <input style={S.input} value={f.name} onChange={e => set('name', e.target.value)} placeholder="Ex: Cochons, Petit-lait..." />
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          <label style={S.label}>Icône</label>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {emojis.map(e => (
+              <button key={e} onClick={() => set('icon', e)}
+                style={{ fontSize: 22, padding: 6, borderRadius: 8, border: f.icon === e ? `2px solid ${C.accent}` : '2px solid transparent', background: f.icon === e ? C.accentSoft : C.input, cursor: 'pointer' }}>
+                {e}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={{ marginBottom: 14 }}>
+          <label style={S.label}>Couleur</label>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {colors.map(c => (
+              <button key={c} onClick={() => set('color', c)}
+                style={{ width: 32, height: 32, borderRadius: 8, background: c, border: f.color === c ? '3px solid white' : '3px solid transparent', cursor: 'pointer' }} />
+            ))}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button style={S.btn('outline')} onClick={onClose}>Annuler</button>
+          <button style={S.btn()} onClick={() => onSave(f)}><Icon d={I.save} size={13} /> Enregistrer</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Client Modal (updated with section + unit) ──
+function ClientModal({ client, sections, onSave, onClose }) {
+  const [f, setF] = useState(client || { name: '', address: '', contact: '', phone: '', notes: '', default_qty: 0, section_id: null, default_unit: 'porcs' })
+  const set = (k, v) => setF({ ...f, [k]: v })
+  return (
+    <div style={S.modal} onClick={onClose}>
+      <div style={S.modalC} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 14 }}>{client ? 'Modifier' : 'Nouveau'} client</div>
+        {[['name', 'Nom', 'Boucherie Exemple'], ['address', 'Adresse', 'Rue du Village 1, 1700 Fribourg'],
+          ['contact', 'Contact', 'Jean Dupont'], ['phone', 'Téléphone', '026 123 45 67'],
+          ['notes', 'Notes chauffeurs', 'Infos livraison...']].map(([k, l, p]) => (
+          <div key={k} style={{ marginBottom: 10 }}>
+            <label style={S.label}>{l}</label>
+            <input style={S.input} value={f[k] || ''} onChange={e => set(k, e.target.value)} placeholder={p} />
+          </div>
+        ))}
+        <div style={{ marginBottom: 10 }}>
+          <label style={S.label}>Section</label>
+          <select style={S.select} value={f.section_id || ''} onChange={e => set('section_id', e.target.value || null)}>
+            <option value="">— Aucune section —</option>
+            {sections.map(s => <option key={s.id} value={s.id}>{s.icon} {s.name}</option>)}
+          </select>
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+          <div style={{ flex: 1 }}>
+            <label style={S.label}>Quantité par défaut</label>
+            <input type="number" style={S.input} value={f.default_qty || 0} onChange={e => set('default_qty', parseInt(e.target.value) || 0)} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <label style={S.label}>Unité</label>
+            <input style={S.input} value={f.default_unit || 'porcs'} onChange={e => set('default_unit', e.target.value)} placeholder="porcs, litres, kg..." />
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button style={S.btn('outline')} onClick={onClose}>Annuler</button>
+          <button style={S.btn()} onClick={() => onSave(f)}><Icon d={I.save} size={13} /> Enregistrer</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Confirm Delivery Modal ──
 function ConfirmModal({ delivery, client, onSave, onClose }) {
   const [qty, setQty] = useState(String(delivery.qty_planned))
   const [notes, setNotes] = useState('')
   const [status, setStatus] = useState('delivered')
-
   return (
     <div style={S.modal} onClick={onClose}>
       <div style={S.modalC} onClick={e => e.stopPropagation()}>
         <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 3 }}>Confirmer livraison</div>
         <div style={{ fontSize: 12, color: C.muted, marginBottom: 14 }}>{client?.name}</div>
         <div style={{ marginBottom: 10 }}>
-          <label style={S.label}>Quantité livrée</label>
+          <label style={S.label}>Quantité livrée ({delivery.unit || 'porcs'})</label>
           <input type="number" style={S.input} value={qty} onChange={e => setQty(e.target.value)} />
         </div>
         <div style={{ marginBottom: 10 }}>
@@ -693,7 +1018,7 @@ function ConfirmModal({ delivery, client, onSave, onClose }) {
         </div>
         <div style={{ marginBottom: 14 }}>
           <label style={S.label}>Note (optionnel)</label>
-          <input style={S.input} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Ex: client absent, 2 refusés..." />
+          <input style={S.input} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Ex: client absent, refusé..." />
         </div>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <button style={S.btn('outline')} onClick={onClose}>Annuler</button>
@@ -706,29 +1031,131 @@ function ConfirmModal({ delivery, client, onSave, onClose }) {
   )
 }
 
-function ClientModal({ client, onSave, onClose }) {
-  const [f, setF] = useState(client || { name: '', address: '', contact: '', phone: '', notes: '', default_qty: 0 })
-  const set = (k, v) => setF({ ...f, [k]: v })
+// ── New Delivery Modal ──
+function NewDeliveryModal({ clients, drivers, sections, onSave, onClose }) {
+  const [driverId, setDriverId] = useState(drivers[0]?.id || '')
+  const [clientId, setClientId] = useState(clients[0]?.id || '')
+  const [qty, setQty] = useState('')
+  const [filterSection, setFilterSection] = useState('')
+  const selClient = clients.find(c => c.id === clientId)
+  const filteredClients = filterSection ? clients.filter(c => c.section_id === filterSection) : clients
 
   return (
     <div style={S.modal} onClick={onClose}>
       <div style={S.modalC} onClick={e => e.stopPropagation()}>
-        <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 14 }}>{client ? 'Modifier' : 'Nouveau'} client</div>
-        {[['name', 'Nom', 'Boucherie Exemple'], ['address', 'Adresse', 'Rue du Village 1, 1700 Fribourg'],
-          ['contact', 'Contact', 'Jean Dupont'], ['phone', 'Téléphone', '026 123 45 67'],
-          ['notes', 'Notes chauffeurs', 'Infos livraison...']].map(([k, l, p]) => (
-          <div key={k} style={{ marginBottom: 10 }}>
-            <label style={S.label}>{l}</label>
-            <input style={S.input} value={f[k] || ''} onChange={e => set(k, e.target.value)} placeholder={p} />
+        <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 14 }}>Nouvelle livraison</div>
+        <div style={{ marginBottom: 10 }}>
+          <label style={S.label}>Chauffeur</label>
+          <select style={S.select} value={driverId} onChange={e => setDriverId(e.target.value)}>
+            {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+          </select>
+        </div>
+        {sections.length > 0 && (
+          <div style={{ marginBottom: 10 }}>
+            <label style={S.label}>Filtrer par section</label>
+            <select style={S.select} value={filterSection} onChange={e => setFilterSection(e.target.value)}>
+              <option value="">Tous les clients</option>
+              {sections.map(s => <option key={s.id} value={s.id}>{s.icon} {s.name}</option>)}
+            </select>
           </div>
-        ))}
+        )}
+        <div style={{ marginBottom: 10 }}>
+          <label style={S.label}>Client</label>
+          <select style={S.select} value={clientId} onChange={e => {
+            setClientId(e.target.value)
+            const c = clients.find(cl => cl.id === e.target.value)
+            if (c) setQty(String(c.default_qty))
+          }}>
+            {filteredClients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
         <div style={{ marginBottom: 14 }}>
-          <label style={S.label}>Quantité par défaut</label>
-          <input type="number" style={S.input} value={f.default_qty || 0} onChange={e => set('default_qty', parseInt(e.target.value) || 0)} />
+          <label style={S.label}>Quantité ({selClient?.default_unit || 'porcs'})</label>
+          <input type="number" style={S.input} value={qty || selClient?.default_qty || ''} onChange={e => setQty(e.target.value)} />
         </div>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <button style={S.btn('outline')} onClick={onClose}>Annuler</button>
-          <button style={S.btn()} onClick={() => onSave(f)}><Icon d={I.save} size={13} /> Enregistrer</button>
+          <button style={S.btn()} onClick={() => onSave({
+            driverId, clientId, qtyPlanned: parseInt(qty || selClient?.default_qty || 0),
+          })}><Icon d={I.save} size={13} /> Ajouter</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Image Gallery Modal (Admin — add/delete) ──
+function ImageGalleryModal({ clientId, images, client, onAdd, onDelete, onClose }) {
+  const fileRef = useRef()
+  const [caption, setCaption] = useState('')
+  const [uploading, setUploading] = useState(false)
+
+  async function handleUpload() {
+    const file = fileRef.current?.files?.[0]
+    if (!file) return
+    setUploading(true)
+    await onAdd(clientId, file, caption)
+    setCaption('')
+    fileRef.current.value = ''
+    setUploading(false)
+  }
+
+  return (
+    <div style={S.modal} onClick={onClose}>
+      <div style={{ ...S.modalC, maxWidth: 500 }} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 3 }}>Photos — {client?.name}</div>
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 14 }}>Photos du lieu de livraison pour les chauffeurs</div>
+
+        {/* Existing images */}
+        {images.map(img => (
+          <div key={img.id} style={{ marginBottom: 10, borderRadius: 8, overflow: 'hidden', border: `1px solid ${C.border}` }}>
+            <img src={img.image_url} alt={img.caption} style={{ width: '100%', maxHeight: 200, objectFit: 'cover', display: 'block' }} />
+            <div style={{ padding: '8px 10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: C.input }}>
+              <span style={{ fontSize: 12, color: C.text }}>{img.caption || 'Sans description'}</span>
+              <button style={{ ...S.btn('ghost'), padding: 4 }} onClick={() => onDelete(img.id)}>
+                <Icon d={I.trash} size={14} color="#ef4444" />
+              </button>
+            </div>
+          </div>
+        ))}
+        {images.length === 0 && <div style={{ textAlign: 'center', color: C.muted, padding: 20 }}>Aucune photo</div>}
+
+        {/* Upload */}
+        <div style={{ marginTop: 12, padding: 12, background: C.input, borderRadius: 8 }}>
+          <label style={S.label}>Ajouter une photo</label>
+          <input type="file" accept="image/*" ref={fileRef}
+            style={{ ...S.input, padding: 6, marginBottom: 8 }} />
+          <input style={{ ...S.input, marginBottom: 8 }} value={caption} onChange={e => setCaption(e.target.value)}
+            placeholder="Description (ex: Quai B, Entrée arrière...)" />
+          <button style={S.btn()} onClick={handleUpload} disabled={uploading}>
+            {uploading ? '⏳ Upload...' : <><Icon d={I.plus} size={13} /> Ajouter</>}
+          </button>
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
+          <button style={S.btn('outline')} onClick={onClose}>Fermer</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Image View Modal (Driver — read only) ──
+function ImageViewModal({ images, client, onClose }) {
+  return (
+    <div style={S.modal} onClick={onClose}>
+      <div style={{ ...S.modalC, maxWidth: 500 }} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 14 }}>📍 {client?.name}</div>
+        {images.map(img => (
+          <div key={img.id} style={{ marginBottom: 10, borderRadius: 8, overflow: 'hidden', border: `1px solid ${C.border}` }}>
+            <img src={img.image_url} alt={img.caption} style={{ width: '100%', maxHeight: 250, objectFit: 'cover', display: 'block' }} />
+            {img.caption && (
+              <div style={{ padding: '8px 10px', fontSize: 12, background: C.input, color: C.text }}>{img.caption}</div>
+            )}
+          </div>
+        ))}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+          <button style={S.btn('outline')} onClick={onClose}>Fermer</button>
         </div>
       </div>
     </div>
